@@ -81,3 +81,33 @@ describe('InstallRegistry', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('InstallRegistry token overrides', () => {
+  const { encodeConfigToken } = require('../../src/config/configToken');
+  process.env.CONFIG_SECRET = process.env.CONFIG_SECRET || 'test-secret-at-least-16-chars';
+
+  test('override replaces the visible token list and is never exposed by list()', () => {
+    const r = new InstallRegistry({ filePath: null });
+    r.touch({ id: 'inst1', kind: 'stream', tokenHashes: ['aaaaaaaa'] });
+    r.recordTokenUse('inst1', 'aaaaaaaa');
+    const blob = encodeConfigToken({ febboxTokens: ['new-token-111', 'new-token-222'] });
+    r.setOverride('inst1', blob, ['aaaaaaaa', 'bbbbbbbb']);
+
+    expect(r.getOverrideTokens('inst1')).toEqual(['new-token-111', 'new-token-222']);
+    const rec = r.list()[0];
+    expect(rec.hasOverride).toBe(true);
+    expect(rec.tokens.map((t) => t.hash)).toEqual(['aaaaaaaa', 'bbbbbbbb']);
+    expect(rec.tokens[0].uses).toBe(1); // history kept for a token that stayed
+    expect(JSON.stringify(rec)).not.toContain(blob);
+  });
+
+  test('clearOverride goes back to the original tokens', () => {
+    const r = new InstallRegistry({ filePath: null });
+    r.touch({ id: 'inst1', kind: 'stream', tokenHashes: ['aaaaaaaa'] });
+    r.setOverride('inst1', encodeConfigToken({ febboxTokens: ['new-token-111'] }), ['cccccccc']);
+    r.clearOverride('inst1', ['aaaaaaaa']);
+    expect(r.getOverrideTokens('inst1')).toBeNull();
+    expect(r.list()[0].hasOverride).toBe(false);
+    expect(r.list()[0].tokens.map((t) => t.hash)).toEqual(['aaaaaaaa']);
+  });
+});

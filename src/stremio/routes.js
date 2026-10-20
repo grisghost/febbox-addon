@@ -18,13 +18,20 @@ const { DISPLAY_MODE, DEFAULT_DISPLAY_MODE, DISPLAY_MODE_VALUES, resolutionLabel
 const PLAYBACK_CACHE_TTL_MS = 5 * 60 * 1000; // FebBox direct links expire; keep this short
 
 /**
- * Record this install in the admin registry (best-effort: the admin page
- * must never be able to break manifest/stream responses). Returns the
- * install id. Only hashes are stored — never raw FebBox tokens.
+ * Identify the install, apply any token override the admin set for it, and
+ * record it in the admin registry (best-effort: the admin page must never be
+ * able to break manifest/stream responses).
+ *
+ * The id always comes from the tokens in the URL, so it stays stable when the
+ * admin swaps tokens. Returns { id, tokens } where `tokens` are the ones to
+ * actually use. Only hashes are stored — never raw FebBox tokens.
  */
-function registerInstall(config, configToken, kind) {
+function resolveInstall(config, configToken, kind) {
   const id = getInstallId(config.febboxTokens);
+  let tokens = config.febboxTokens;
   try {
+    const override = registry.getOverrideTokens(id);
+    if (override) tokens = override;
     registry.touch({
       id,
       kind,
@@ -32,12 +39,12 @@ function registerInstall(config, configToken, kind) {
       playbackMode: config.playbackMode,
       displayMode: config.displayMode,
       configToken,
-      tokenHashes: config.febboxTokens.map((t) => hashToken(t).slice(0, 8)),
+      tokenHashes: tokens.map((t) => hashToken(t).slice(0, 8)),
     });
   } catch (_) {
     /* ignore */
   }
-  return id;
+  return { id, tokens };
 }
 
 /** Fire-and-forget registry call wrapper. */
@@ -150,7 +157,7 @@ function manifestHandler(req, res) {
   try {
     const config = decodeConfigToken(req.params.configToken);
     isConfigured = Boolean(config && config.febboxToken);
-    if (isConfigured) registerInstall(config, req.params.configToken, 'manifest');
+    if (isConfigured) resolveInstall(config, req.params.configToken, 'manifest');
   } catch (e) {
     isConfigured = false;
   }
@@ -171,8 +178,7 @@ async function streamHandler(req, res) {
     return res.json({ streams: [] });
   }
 
-  const febboxTokens = config.febboxTokens;
-  const installId = registerInstall(config, configToken, 'stream');
+  const { id: installId, tokens: febboxTokens } = resolveInstall(config, configToken, 'stream');
   if (registry.isBlocked(installId)) {
     return res.json({ streams: [] });
   }

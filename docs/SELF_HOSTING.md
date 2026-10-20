@@ -104,8 +104,18 @@ Set `ADMIN_PASSWORD` and open `/admin` over HTTPS; you sign in with that passwor
 It lists every install the server has seen (name, last activity, request/error
 counters, number of failovers) and, for each token, its status and remaining
 quota (shown only as an 8-character hash prefix, never the token). From there you
-can refresh quotas, block an install (it then receives no streams), or remove it
+can copy an install's addon link, edit its tokens, refresh quotas, block an install (it then receives no streams), or remove it
 from the list. Installs are recorded in `DATA_DIR/registry.json`; on hosts with an
 ephemeral disk the list resets on redeploy. Because install URLs are stateless,
 "block" works by install id and cannot revoke the URL itself — rotate
 `CONFIG_SECRET` to invalidate every install at once.
+
+### Editing tokens from the admin page
+
+"Edit tokens" on an install lets you replace, add, remove and reorder its tokens
+(max 5) **without changing its addon URL** — nothing to reinstall in Stremio.
+New tokens are checked against FebBox before saving. The override is stored
+encrypted (with `CONFIG_SECRET`) in `DATA_DIR/registry.json`, and existing tokens
+are only ever shown as 8-character hashes. "Reset to original" goes back to the
+tokens inside the URL. If `DATA_DIR` is not on a persistent volume, an override is
+lost on redeploy and the install falls back to the URL's tokens.

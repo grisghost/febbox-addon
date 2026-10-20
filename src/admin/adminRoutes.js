@@ -6,7 +6,8 @@ const express = require('express');
 
 const { registry } = require('./registry');
 const tokenPool = require('../providers/febbox/tokenPool');
-const { decodeConfigToken } = require('../config/configToken');
+const { decodeConfigToken, encodeConfigToken, hashToken, MAX_TOKENS } = require('../config/configToken');
+const { normalizeToken, isPlausibleToken } = require('../providers/febbox/auth');
 const { createRateLimiter } = require('../security/rateLimit');
 const metrics = require('../metrics/metrics');
 const logger = require('../logging/logger');
@@ -107,16 +108,30 @@ function requireSameOriginAction(req, res, next) {
   return next();
 }
 
-async function refreshInstall(id) {
+const hash8 = (t) => hashToken(t).slice(0, 8);
+
+/** Tokens an install uses right now: the admin's override, else the ones in its URL. */
+function currentTokens(id) {
+  const override = registry.getOverrideTokens(id);
+  if (override) return override;
+  return originalTokens(id);
+}
+
+/** Tokens baked into the install URL (null if unknown / undecodable). */
+function originalTokens(id) {
   const ct = registry.getConfigToken(id);
   if (!ct) return null;
-  let config;
   try {
-    config = decodeConfigToken(ct);
+    return decodeConfigToken(ct).febboxTokens;
   } catch (_) {
     return null;
   }
-  const snaps = await tokenPool.inspectTokens(config.febboxTokens);
+}
+
+async function refreshInstall(id) {
+  const tokens = currentTokens(id);
+  if (!tokens) return null;
+  const snaps = await tokenPool.inspectTokens(tokens);
   registry.setTokenSnapshots(id, snaps);
   return snaps;
 }
@@ -166,6 +181,9 @@ function createAdminRouter() {
     const cooldowns = tokenPool.cooldownByShortHash();
     const installs = registry.list().map((rec) => ({
       ...rec,
+      // Path of this install's addon URL (the page prepends its own origin).
+      // Admin-only: it is as sensitive as the addon link itself.
+      installPath: registry.getConfigToken(rec.id) ? `/${registry.getConfigToken(rec.id)}/manifest.json` : null,
       tokens: rec.tokens.map((t) => {
         const cd = cooldowns[t.hash];
         return cd ? { ...t, status: t.status === 'invalid' ? 'invalid' : 'cooldown', cooldown: cd } : t;
@@ -203,6 +221,67 @@ function createAdminRouter() {
       }
     }
     res.json({ ok: true, refreshed, total: ids.length });
+  });
+
+  /**
+   * Replace the tokens an install uses without changing its URL.
+   * Body: { slots: [ { keep: "<8-char hash>" } | { token: "<new token>" } ] }
+   * Existing tokens are referenced by hash so raw tokens never travel to the browser.
+   */
+  router.put('/api/admin/installs/:id/tokens', requireSameOriginAction, async (req, res) => {
+    const { id } = req.params;
+    const current = currentTokens(id);
+    if (!current) return res.status(404).json({ error: 'Install not found' });
+
+    const slots = Array.isArray(req.body && req.body.slots) ? req.body.slots : [];
+    if (slots.length === 0) return res.status(400).json({ error: 'At least one token is required.' });
+    if (slots.length > MAX_TOKENS) return res.status(400).json({ error: `At most ${MAX_TOKENS} tokens are supported.` });
+
+    const byHash = new Map(current.map((t) => [hash8(t), t]));
+    const tokens = [];
+    const fresh = []; // [{ token, position }]
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i] || {};
+      let token = null;
+      if (typeof slot.keep === 'string') {
+        token = byHash.get(slot.keep);
+        if (!token) return res.status(400).json({ error: `Token #${i + 1} no longer exists; reload and try again.` });
+      } else if (typeof slot.token === 'string') {
+        token = normalizeToken(slot.token);
+        if (!isPlausibleToken(token)) return res.status(400).json({ error: `Token #${i + 1} has an invalid format.` });
+        if (!current.includes(token)) fresh.push({ token, position: i + 1 });
+      } else {
+        return res.status(400).json({ error: `Token #${i + 1} is empty.` });
+      }
+      if (tokens.includes(token)) return res.status(400).json({ error: `Token #${i + 1} is a duplicate.` });
+      tokens.push(token);
+    }
+
+    // Reject tokens FebBox says are invalid. A failed lookup (network) is not a rejection.
+    for (const { token, position } of fresh) {
+      // eslint-disable-next-line no-await-in-loop
+      const { status } = await tokenPool.checkQuota(token, { force: true });
+      if (status === 'invalid') return res.status(400).json({ error: `Token #${position} was rejected by FebBox.` });
+    }
+
+    try {
+      registry.setOverride(id, encodeConfigToken({ febboxTokens: tokens }), tokens.map(hash8));
+      const snaps = await tokenPool.inspectTokens(tokens);
+      registry.setTokenSnapshots(id, snaps);
+      logger.info('admin_tokens_updated', { installId: id, count: tokens.length });
+      return res.json({ ok: true, tokens: snaps });
+    } catch (err) {
+      logger.error('admin_tokens_update_failed', { message: String(err && err.message) });
+      return res.status(500).json({ error: 'Could not save tokens.' });
+    }
+  });
+
+  /** Drop the override: the install goes back to the tokens baked into its URL. */
+  router.delete('/api/admin/installs/:id/tokens', requireSameOriginAction, (req, res) => {
+    const original = originalTokens(req.params.id);
+    if (!original) return res.status(404).json({ error: 'Install not found' });
+    registry.clearOverride(req.params.id, original.map(hash8));
+    return res.json({ ok: true });
   });
 
   router.post('/api/admin/installs/:id/block', requireSameOriginAction, (req, res) => {

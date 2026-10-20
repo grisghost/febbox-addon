@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { decodeConfigToken } = require('../config/configToken');
 
 /**
  * Install registry: what the admin page shows.
@@ -17,6 +18,8 @@ const path = require('path');
  *  - We do store the *encrypted* config token (`ct`) so the admin can refresh
  *    quotas without waiting for traffic. It is useless without CONFIG_SECRET
  *    and is never returned by the admin API.
+ *  - Token overrides set from the admin page (`ov`) are stored the same way:
+ *    an encrypted blob, never returned by the API, never plaintext.
  *  - The JSON file is written with mode 0600.
  *
  * Persistence is a debounced atomic JSON write. Disabled when filePath is
@@ -118,10 +121,7 @@ class InstallRegistry {
     if (info.displayMode) rec.displayMode = info.displayMode;
     if (info.configToken) rec.ct = info.configToken;
 
-    const known = new Map((rec.tokens || []).map((t) => [t.hash, t]));
-    rec.tokens = info.tokenHashes.map(
-      (hash) => known.get(hash) || { hash, status: 'unknown', uses: 0, lastUsed: null, lastFailure: null }
-    );
+    this._syncTokens(rec, info.tokenHashes);
     this._markDirty();
     return rec;
   }
@@ -197,6 +197,48 @@ class InstallRegistry {
     return ok;
   }
 
+  /**
+   * Tokens the admin set for this install (replacing the ones baked into its
+   * URL), or null. Server-side use only — callers must never return these.
+   */
+  getOverrideTokens(id) {
+    const rec = this.installs.get(id);
+    if (!rec || !rec.ov) return null;
+    try {
+      const tokens = decodeConfigToken(rec.ov).febboxTokens;
+      return tokens && tokens.length ? tokens : null;
+    } catch (_) {
+      return null; // e.g. CONFIG_SECRET changed: fall back to the URL's tokens
+    }
+  }
+
+  /** Save an encrypted override blob and re-sync the visible token list. */
+  setOverride(id, blob, tokenHashes) {
+    const rec = this.installs.get(id);
+    if (!rec) return false;
+    rec.ov = blob;
+    this._syncTokens(rec, tokenHashes);
+    this._markDirty();
+    return true;
+  }
+
+  /** Drop the override (back to the URL's own tokens). */
+  clearOverride(id, originalHashes) {
+    const rec = this.installs.get(id);
+    if (!rec) return false;
+    delete rec.ov;
+    this._syncTokens(rec, originalHashes);
+    this._markDirty();
+    return true;
+  }
+
+  _syncTokens(rec, tokenHashes) {
+    const known = new Map((rec.tokens || []).map((t) => [t.hash, t]));
+    rec.tokens = tokenHashes.map(
+      (hash) => known.get(hash) || { hash, status: 'unknown', uses: 0, lastUsed: null, lastFailure: null }
+    );
+  }
+
   /** Encrypted config token for an install (admin refresh only; never sent to clients). */
   getConfigToken(id) {
     const rec = this.installs.get(id);
@@ -207,10 +249,11 @@ class InstallRegistry {
   list(now = Date.now()) {
     return [...this.installs.values()]
       .map((rec) => {
-        const { ct, ...safe } = rec; // eslint-disable-line no-unused-vars
+        const { ct, ov, ...safe } = rec; // eslint-disable-line no-unused-vars
         const age = now - rec.lastSeen;
         return {
           ...safe,
+          hasOverride: Boolean(ov),
           activity: rec.blocked ? 'blocked' : age <= HOUR ? 'active' : age <= DAY ? 'recent' : 'idle',
         };
       })

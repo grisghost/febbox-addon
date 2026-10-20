@@ -87,3 +87,22 @@
   .adm-install { padding: 16px; border-radius: 13px; }
   .adm-login { margin-top: 4vh; }
 }
+
+/* Header badges + custom-token marker */
+.adm-badges { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.adm-badge.custom { color: var(--brand); background: var(--brand-glow); }
+
+/* Token editor */
+.adm-editor { border: 1px solid var(--border); border-radius: 14px; padding: 16px; margin-top: 16px; background: rgba(127,127,127,0.04); }
+.adm-editor-title { font-family: var(--font-display); font-weight: 700; margin-bottom: 4px; }
+.adm-editor-hint { color: var(--text-muted); font-size: 0.82rem; margin: 0 0 14px; }
+.adm-slot { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.adm-slot-n { font-family: var(--font-display); font-weight: 700; color: var(--text-muted); width: 24px; }
+.adm-slot-current { flex: 1; min-width: 160px; display: flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 0.85rem; background: var(--bg); border: 1px solid var(--border); border-radius: 11px; padding: 10px 14px; }
+.adm-slot-current em { margin-left: auto; font-style: normal; font-family: var(--font-body); font-size: 0.72rem; color: var(--text-muted); }
+.adm-slot-input { flex: 1; min-width: 200px; }
+.adm-slot-tools { display: flex; gap: 4px; }
+.adm-icon-btn { padding: 8px; border-radius: 9px; background: transparent; color: var(--text-muted); display: inline-flex; }
+.adm-icon-btn:hover:not(:disabled) { background: rgba(127,127,127,0.14); color: var(--text); }
+.adm-editor .status { margin-top: 12px; }
+.adm-editor .adm-actions { margin-top: 14px; }

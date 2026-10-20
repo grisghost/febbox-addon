@@ -13,6 +13,12 @@ import {
   Prohibit,
   Trash,
   CaretRight,
+  Copy,
+  PencilSimple,
+  Plus,
+  ArrowUp,
+  ArrowDown,
+  X,
 } from '@phosphor-icons/react';
 import './admin.css';
 
@@ -37,6 +43,35 @@ async function api(path, { method = 'GET', body } = {}) {
     throw err;
   }
   return data;
+}
+
+const MAX_TOKENS = 5; // keep in sync with MAX_TOKENS in src/config/configToken.js
+
+/** Copy text; falls back to a hidden textarea where the Clipboard API needs HTTPS and isn't available. */
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) {
+    /* fall through */
+  }
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try {
+    ok = document.execCommand('copy');
+  } catch (_) {
+    ok = false;
+  }
+  document.body.removeChild(area);
+  return ok;
 }
 
 function formatMB(mb) {
@@ -209,9 +244,138 @@ function TokenRow({ token, index, now }) {
   );
 }
 
+function TokenEditor({ rec, onSaved, onCancel }) {
+  // Existing tokens are referenced by their hash; the browser never receives raw tokens.
+  const [slots, setSlots] = useState(() => rec.tokens.map((t) => ({ keep: t.hash, value: '', show: false })));
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [confirmReset, setConfirmReset] = useState(false);
+
+  const update = (i, patch) => setSlots((list) => list.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const move = (i, dir) =>
+    setSlots((list) => {
+      const j = i + dir;
+      if (j < 0 || j >= list.length) return list;
+      const next = [...list];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  const remove = (i) => setSlots((list) => list.filter((_, idx) => idx !== i));
+  const add = () => setSlots((list) => (list.length < MAX_TOKENS ? [...list, { keep: null, value: '', show: false }] : list));
+
+  const filled = slots.filter((s) => s.keep || s.value.trim());
+
+  const save = async () => {
+    setBusy('save');
+    setError('');
+    try {
+      await api(`/api/admin/installs/${rec.id}/tokens`, {
+        method: 'PUT',
+        body: { slots: filled.map((s) => (s.keep ? { keep: s.keep } : { token: s.value.trim() })) },
+      });
+      await onSaved();
+    } catch (err) {
+      setError(err.message);
+      setBusy('');
+    }
+  };
+
+  const reset = async () => {
+    setBusy('reset');
+    setError('');
+    try {
+      await api(`/api/admin/installs/${rec.id}/tokens`, { method: 'DELETE' });
+      await onSaved();
+    } catch (err) {
+      setError(err.message);
+      setBusy('');
+    }
+  };
+
+  return (
+    <div className="adm-editor">
+      <div className="adm-editor-title">Edit tokens</div>
+      <p className="adm-editor-hint">
+        Tokens are tried in order; the next one is used automatically when the previous runs out of quota. The addon link
+        stays the same — no reinstall needed.
+      </p>
+
+      {slots.map((slot, i) => (
+        <div className="adm-slot" key={i}>
+          <span className="adm-slot-n">#{i + 1}</span>
+          {slot.keep ? (
+            <>
+              <span className="adm-slot-current"><Key weight="bold" size={14} /> {slot.keep}<em>current</em></span>
+              <button type="button" className="btn-secondary adm-btn-sm" onClick={() => update(i, { keep: null })}>
+                Replace
+              </button>
+            </>
+          ) : (
+            <div className="token-row adm-slot-input">
+              <Key weight="bold" className="token-icon" />
+              <input
+                type={slot.show ? 'text' : 'password'}
+                autoComplete="off"
+                placeholder="Paste new FebBox token"
+                value={slot.value}
+                onChange={(e) => update(i, { value: e.target.value })}
+                aria-label={`New token ${i + 1}`}
+              />
+              <button type="button" className="toggle-visibility" onClick={() => update(i, { show: !slot.show })} aria-label="Show or hide token">
+                {slot.show ? <EyeSlash weight="bold" /> : <Eye weight="bold" />}
+              </button>
+            </div>
+          )}
+          <div className="adm-slot-tools">
+            <button type="button" className="adm-icon-btn" disabled={i === 0} onClick={() => move(i, -1)} aria-label="Move up"><ArrowUp weight="bold" /></button>
+            <button type="button" className="adm-icon-btn" disabled={i === slots.length - 1} onClick={() => move(i, 1)} aria-label="Move down"><ArrowDown weight="bold" /></button>
+            <button type="button" className="adm-icon-btn" disabled={slots.length === 1} onClick={() => remove(i)} aria-label="Remove token"><X weight="bold" /></button>
+          </div>
+        </div>
+      ))}
+
+      {slots.length < MAX_TOKENS && (
+        <button type="button" className="link-btn" onClick={add}>
+          <Plus weight="bold" /> Add a backup token
+        </button>
+      )}
+
+      {error && (
+        <div className="status show err">
+          <Warning weight="bold" className="status-icon" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="adm-actions">
+        <button type="button" className="btn-primary adm-btn-sm" disabled={Boolean(busy) || filled.length === 0} onClick={save}>
+          {busy === 'save' ? <Spinner weight="bold" className="spin" /> : <Check weight="bold" />}
+          {busy === 'save' ? 'Checking & saving…' : 'Save tokens'}
+        </button>
+        <button type="button" className="btn-secondary adm-btn-sm" disabled={Boolean(busy)} onClick={onCancel}>
+          Cancel
+        </button>
+        {rec.hasOverride &&
+          (confirmReset ? (
+            <button type="button" className="adm-danger adm-btn-sm" disabled={Boolean(busy)} onClick={reset}>
+              {busy === 'reset' ? <Spinner weight="bold" className="spin" /> : null}
+              Confirm reset to original
+            </button>
+          ) : (
+            <button type="button" className="adm-danger adm-btn-sm" disabled={Boolean(busy)} onClick={() => setConfirmReset(true)}>
+              Reset to original
+            </button>
+          ))}
+      </div>
+    </div>
+  );
+}
+
 function InstallCard({ rec, now, onChanged, onError }) {
   const [busy, setBusy] = useState('');
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [copied, setCopied] = useState(false);
   const errorTotal = Object.values(rec.errors || {}).reduce((a, b) => a + b, 0);
 
   const run = async (name, fn) => {
@@ -227,6 +391,15 @@ function InstallCard({ rec, now, onChanged, onError }) {
     }
   };
 
+  const copyLink = async () => {
+    if (!rec.installPath) return;
+    const ok = await copyText(`${window.location.origin}${rec.installPath}`);
+    if (!ok) return onError(new Error('Could not copy — your browser blocked clipboard access.'));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1800);
+    return undefined;
+  };
+
   return (
     <article className={`adm-install ${rec.blocked ? 'is-blocked' : ''}`}>
       <div className="adm-head">
@@ -234,7 +407,10 @@ function InstallCard({ rec, now, onChanged, onError }) {
           <div className={`adm-name ${rec.label ? '' : 'unnamed'}`}>{rec.label || 'Unnamed install'}</div>
           <div className="adm-id">{rec.id}</div>
         </div>
-        <span className={`adm-badge ${rec.activity}`}>{ACTIVITY_LABEL[rec.activity] || rec.activity}</span>
+        <div className="adm-badges">
+          {rec.hasOverride && <span className="adm-badge custom">Custom tokens</span>}
+          <span className={`adm-badge ${rec.activity}`}>{ACTIVITY_LABEL[rec.activity] || rec.activity}</span>
+        </div>
       </div>
 
       <div className="adm-metrics">
@@ -256,7 +432,26 @@ function InstallCard({ rec, now, onChanged, onError }) {
         ))}
       </div>
 
+      {editing && (
+        <TokenEditor
+          rec={rec}
+          onCancel={() => setEditing(false)}
+          onSaved={async () => {
+            setEditing(false);
+            await onChanged();
+          }}
+        />
+      )}
+
       <div className="adm-actions">
+        <button type="button" className="btn-primary adm-btn-sm" disabled={!rec.installPath} onClick={copyLink} title="Copy this install's addon URL">
+          {copied ? <Check weight="bold" /> : <Copy weight="bold" />}
+          {copied ? 'Copied' : 'Copy link'}
+        </button>
+        <button type="button" className="btn-secondary adm-btn-sm" disabled={Boolean(busy) || editing} onClick={() => setEditing(true)}>
+          <PencilSimple weight="bold" />
+          Edit tokens
+        </button>
         <button
           type="button"
           className="btn-secondary adm-btn-sm"

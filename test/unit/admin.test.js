@@ -94,7 +94,52 @@ describe('admin area', () => {
     expect(inst.tokens).toHaveLength(2);
     const body = JSON.stringify(resp.body);
     expect(body).not.toContain('super-secret-aaaa');
-    expect(body).not.toContain(cfg);
+    // The addon link is returned (admin-only) so the page can offer "Copy link".
+    expect(inst.installPath).toBe(`/${cfg}/manifest.json`);
+  });
+
+  test('admin can swap tokens without changing the install URL; GET never returns them', async () => {
+    process.env.ADMIN_PASSWORD = PASSWORD;
+    const cfg = encodeConfigToken({ febboxTokens: ['original-token-1'], label: 'Swap me' }, SECRET);
+    await request(app).get(`/${cfg}/manifest.json`);
+    const id = registry.list().find((i) => i.label === 'Swap me').id;
+    const { cookie } = await login(app);
+
+    // FebBox accepts the new token.
+    nock('https://www.febbox.com').get('/console/user_cards').query(true)
+      .reply(200, { data: { flow: { traffic_limit_mb: 1000, traffic_usage_mb: 10 } } }).persist();
+
+    const resp = await request(app).put(`/api/admin/installs/${id}/tokens`).set('Cookie', cookie).set('X-Admin-Request', '1')
+      .send({ slots: [{ token: 'replacement-token-2' }, { keep: registry.list().find((i) => i.id === id).tokens[0].hash }] });
+    expect(resp.status).toBe(200);
+    expect(JSON.stringify(resp.body)).not.toContain('replacement-token-2');
+    expect(registry.getOverrideTokens(id)).toEqual(['replacement-token-2', 'original-token-1']);
+
+    const overview = await request(app).get('/api/admin/overview').set('Cookie', cookie);
+    const inst = overview.body.installs.find((i) => i.id === id);
+    expect(inst.hasOverride).toBe(true);
+    expect(inst.tokens).toHaveLength(2);
+    expect(JSON.stringify(overview.body)).not.toContain('replacement-token-2');
+
+    const reset = await request(app).delete(`/api/admin/installs/${id}/tokens`).set('Cookie', cookie).set('X-Admin-Request', '1');
+    expect(reset.status).toBe(200);
+    expect(registry.getOverrideTokens(id)).toBeNull();
+    nock.cleanAll();
+  });
+
+  test('a token FebBox rejects is not saved', async () => {
+    process.env.ADMIN_PASSWORD = PASSWORD;
+    const cfg = encodeConfigToken({ febboxTokens: ['original-token-9'], label: 'Reject me' }, SECRET);
+    await request(app).get(`/${cfg}/manifest.json`);
+    const id = registry.list().find((i) => i.label === 'Reject me').id;
+    const { cookie } = await login(app);
+    nock('https://www.febbox.com').get('/console/user_cards').query(true).reply(401, {});
+
+    const resp = await request(app).put(`/api/admin/installs/${id}/tokens`).set('Cookie', cookie).set('X-Admin-Request', '1')
+      .send({ slots: [{ token: 'bad-bad-token-x' }] });
+    expect(resp.status).toBe(400);
+    expect(registry.getOverrideTokens(id)).toBeNull();
+    nock.cleanAll();
   });
 
   test('mutating routes need the X-Admin-Request header; block stops streams', async () => {
