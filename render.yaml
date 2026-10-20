@@ -14,3 +14,5 @@ services:
         sync: false
       - key: TMDB_API_KEY
         sync: false
+      - key: ADMIN_PASSWORD
+        sync: false

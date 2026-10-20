@@ -30,6 +30,13 @@ const PLAYBACK_MODE_VALUES = new Set(Object.values(PLAYBACK_MODE));
 const INCLUDES_DIRECT = new Set([PLAYBACK_MODE.DIRECT, PLAYBACK_MODE.BOTH]);
 const INCLUDES_HLS = new Set([PLAYBACK_MODE.EXPERIMENTAL_HLS, PLAYBACK_MODE.BOTH]);
 
+// Errors that mean "this token can't be used right now" — they must bubble
+// up (instead of being swallowed per-file) so the token pool can fail over.
+const TOKEN_LEVEL_ERRORS = new Set(['AUTH_INVALID', 'QUOTA_EXCEEDED', 'RATE_LIMITED']);
+function isTokenLevelError(err) {
+  return err instanceof FebBoxError && TOKEN_LEVEL_ERRORS.has(err.code);
+}
+
 const MAX_RECURSION_DEPTH = 4; // guard against pathological folder nesting
 const REQUEST_SPACING_MS = 250; // small pacing between sequential FebBox calls to avoid tripping burst rate limits
 
@@ -144,6 +151,7 @@ async function resolveMovie({ token, shareKey, playbackMode = DEFAULT_PLAYBACK_M
       const streams = await resolveFileStreams({ token, shareKey, fid: f.fid, fileName: f.name, playbackMode });
       results.push(...streams);
     } catch (err) {
+      if (isTokenLevelError(err)) throw err; // let the token pool fail over
       // Skip files that fail to resolve individually; don't fail the whole request.
       continue;
     }
@@ -198,6 +206,7 @@ async function resolveEpisode({ token, shareKey, season, episode, playbackMode =
       const streams = await resolveFileStreams({ token, shareKey, fid: f.fid, fileName: f.name, playbackMode });
       results.push(...streams);
     } catch (err) {
+      if (isTokenLevelError(err)) throw err; // let the token pool fail over
       continue;
     }
     // eslint-disable-next-line no-await-in-loop

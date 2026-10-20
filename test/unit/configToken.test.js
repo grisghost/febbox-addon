@@ -48,3 +48,33 @@ describe('configToken', () => {
     expect(h1).toMatch(/^[a-f0-9]{64}$/);
   });
 });
+
+describe('multiple FebBox tokens in one config', () => {
+  const { getInstallId, MAX_TOKENS } = require('../../src/config/configToken');
+
+  test('round-trips an ordered token list and exposes the first as febboxToken', () => {
+    const token = encodeConfigToken({ febboxTokens: ['first-token-1', 'second-token-2'], label: 'TV' }, SECRET);
+    const decoded = decodeConfigToken(token, SECRET);
+    expect(decoded.febboxTokens).toEqual(['first-token-1', 'second-token-2']);
+    expect(decoded.febboxToken).toBe('first-token-1');
+    expect(decoded.label).toBe('TV');
+  });
+
+  test('legacy single febboxToken payloads decode into a one-item list', () => {
+    const decoded = decodeConfigToken(encodeConfigToken({ febboxToken: 'abc123' }, SECRET), SECRET);
+    expect(decoded.febboxTokens).toEqual(['abc123']);
+  });
+
+  test('dedupes, trims and caps the list', () => {
+    const many = Array.from({ length: MAX_TOKENS + 3 }, (_, i) => `token-number-${i}`);
+    const decoded = decodeConfigToken(encodeConfigToken({ febboxTokens: [' dup-token-1 ', 'dup-token-1', ...many] }, SECRET), SECRET);
+    expect(decoded.febboxTokens).toHaveLength(MAX_TOKENS);
+    expect(decoded.febboxTokens[0]).toBe('dup-token-1');
+  });
+
+  test('install id is stable for the same ordered tokens and differs otherwise', () => {
+    expect(getInstallId(['a', 'b'])).toBe(getInstallId(['a', 'b']));
+    expect(getInstallId(['a', 'b'])).not.toBe(getInstallId(['b', 'a']));
+    expect(getInstallId(['a', 'b'])).toHaveLength(12);
+  });
+});

@@ -1,0 +1,89 @@
+/* Admin dashboard — built on the same tokens/components as the config page (index.css). */
+
+.adm-wrap { max-width: 1040px; margin: 0 auto; }
+
+/* Login */
+.adm-login { max-width: 420px; margin: 8vh auto 0; }
+.adm-login .brand { justify-content: center; }
+.adm-login .tagline { text-align: center; margin-left: auto; margin-right: auto; }
+.adm-login .card { padding: 26px; }
+.adm-login form > * + * { margin-top: 16px; }
+.adm-login .status { min-height: 0; }
+
+/* Top bar */
+.adm-top { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; margin-bottom: 22px; }
+.adm-top .brand { margin-bottom: 0; }
+.adm-top-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.adm-updated { color: var(--text-muted); font-size: 0.8rem; }
+.adm-btn-sm { padding: 9px 14px; font-size: 0.85rem; }
+
+/* Summary */
+.adm-stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; margin-bottom: 20px; }
+@media (max-width: 960px) { .adm-stats { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 520px) { .adm-stats { grid-template-columns: repeat(2, 1fr); } }
+.adm-stat { background: var(--card); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--shadow); padding: 14px 16px; animation: rise .4s ease both; }
+.adm-stat-value { font-family: var(--font-display); font-size: 1.6rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; }
+.adm-stat-label { color: var(--text-muted); font-size: 0.78rem; margin-top: 4px; }
+.adm-stat.warn .adm-stat-value { color: var(--red); }
+
+/* Toolbar */
+.adm-toolbar { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-bottom: 16px; }
+.adm-search { position: relative; flex: 1; min-width: 200px; max-width: 360px; }
+.adm-search svg { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+.adm-search input[type="text"] { padding-left: 38px; padding-right: 14px; }
+.adm-seg { display: inline-flex; background: rgba(127,127,127,0.12); border-radius: 11px; padding: 3px; gap: 2px; }
+.adm-seg button { padding: 7px 14px; font-size: 0.82rem; background: transparent; color: var(--text-muted); border-radius: 9px; }
+.adm-seg button.on { background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.12); }
+
+/* Install cards */
+.adm-list { display: flex; flex-direction: column; gap: 16px; }
+.adm-install { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 20px 22px; animation: rise .4s ease both; min-width: 0; }
+.adm-install.is-blocked { opacity: 0.72; }
+.adm-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.adm-name { font-family: var(--font-display); font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; }
+.adm-name.unnamed { color: var(--text-muted); font-weight: 600; }
+.adm-id { font-family: var(--font-mono); font-size: 0.75rem; color: var(--text-muted); margin-top: 2px; }
+.adm-badge { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; padding: 3px 9px; border-radius: 7px; white-space: nowrap; }
+.adm-badge.active { color: var(--green); background: rgba(62,207,131,0.14); }
+.adm-badge.recent { color: var(--blue-fg); background: var(--blue-bg); }
+.adm-badge.idle { color: var(--text-muted); background: rgba(127,127,127,0.14); }
+.adm-badge.blocked { color: var(--red); background: rgba(255,107,129,0.14); }
+
+.adm-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; margin: 16px 0 14px; }
+.adm-metric { background: var(--bg); border: 1px solid var(--border); border-radius: 11px; padding: 9px 12px; }
+.adm-metric b { display: block; font-family: var(--font-display); font-size: 1rem; }
+.adm-metric span { color: var(--text-muted); font-size: 0.74rem; }
+.adm-sub { color: var(--text-muted); font-size: 0.8rem; margin-bottom: 14px; }
+
+.adm-tokens { display: flex; flex-direction: column; gap: 8px; }
+.adm-token { border: 1px solid var(--border); border-radius: 12px; padding: 11px 14px; background: rgba(127,127,127,0.03); }
+.adm-token-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.adm-token-name { font-family: var(--font-mono); font-size: 0.82rem; display: flex; align-items: center; gap: 8px; }
+.adm-primary { font-family: var(--font-display); font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--brand); background: var(--brand-glow); padding: 2px 7px; border-radius: 6px; }
+.adm-chip { font-size: 0.74rem; font-weight: 700; padding: 2px 9px; border-radius: 7px; }
+.adm-chip.ok { color: var(--green); background: rgba(62,207,131,0.14); }
+.adm-chip.low, .adm-chip.cooldown, .adm-chip.unknown { color: var(--amber-fg); background: var(--amber-bg); }
+.adm-chip.exhausted, .adm-chip.invalid { color: var(--red); background: rgba(255,107,129,0.14); }
+.adm-bar { height: 6px; border-radius: 999px; background: rgba(127,127,127,0.2); overflow: hidden; margin: 9px 0 6px; }
+.adm-bar > i { display: block; height: 100%; background: var(--green); border-radius: 999px; transition: width .3s ease; }
+.adm-bar.low > i { background: #e0a526; }
+.adm-bar.exhausted > i { background: var(--red); }
+.adm-token-meta { color: var(--text-muted); font-size: 0.78rem; }
+
+.adm-actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+.adm-danger { background: rgba(214,67,90,0.1); color: var(--red); }
+.adm-danger:hover:not(:disabled) { background: rgba(214,67,90,0.18); }
+
+.adm-empty { text-align: center; color: var(--text-muted); padding: 38px 20px; background: var(--card); border: 1px dashed var(--border); border-radius: var(--radius); }
+.adm-empty h3 { font-family: var(--font-display); color: var(--text); margin: 0 0 6px; font-size: 1.02rem; }
+.adm-empty p { margin: 0; font-size: 0.87rem; }
+
+.adm-server { margin-top: 22px; }
+.adm-kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+.adm-kv div { display: flex; justify-content: space-between; gap: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; font-size: 0.82rem; }
+.adm-kv span { color: var(--text-muted); font-family: var(--font-mono); }
+
+@media (max-width: 520px) {
+  .adm-install { padding: 16px; border-radius: 13px; }
+  .adm-login { margin-top: 4vh; }
+}

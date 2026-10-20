@@ -1,7 +1,7 @@
 'use strict';
 
 const { buildManifest } = require('./manifest');
-const { decodeConfigToken, hashToken } = require('../config/configToken');
+const { decodeConfigToken, hashToken, getInstallId } = require('../config/configToken');
 const { parseSeriesId, convertImdbToTmdb, getAlternativeTitles } = require('../metadata/tmdb');
 const catalog = require('../providers/febbox/catalog');
 const resolver = require('../providers/febbox/resolver');
@@ -11,9 +11,43 @@ const { redactError } = require('../security/redact');
 const { playbackCache } = require('../cache/ttlCache');
 const { incrementCounter, timed, METRIC } = require('../metrics/metrics');
 const logger = require('../logging/logger');
+const tokenPool = require('../providers/febbox/tokenPool');
+const { registry } = require('../admin/registry');
 const { DISPLAY_MODE, DEFAULT_DISPLAY_MODE, DISPLAY_MODE_VALUES, resolutionLabel, buildCleanTitle } = require('./displayMode');
 
 const PLAYBACK_CACHE_TTL_MS = 5 * 60 * 1000; // FebBox direct links expire; keep this short
+
+/**
+ * Record this install in the admin registry (best-effort: the admin page
+ * must never be able to break manifest/stream responses). Returns the
+ * install id. Only hashes are stored — never raw FebBox tokens.
+ */
+function registerInstall(config, configToken, kind) {
+  const id = getInstallId(config.febboxTokens);
+  try {
+    registry.touch({
+      id,
+      kind,
+      label: typeof config.label === 'string' ? config.label : undefined,
+      playbackMode: config.playbackMode,
+      displayMode: config.displayMode,
+      configToken,
+      tokenHashes: config.febboxTokens.map((t) => hashToken(t).slice(0, 8)),
+    });
+  } catch (_) {
+    /* ignore */
+  }
+  return id;
+}
+
+/** Fire-and-forget registry call wrapper. */
+function safely(fn) {
+  try {
+    fn();
+  } catch (_) {
+    /* ignore */
+  }
+}
 
 /**
  * Turn a raw release filename ("silo.s03e04.1080p.web.h264-group.mkv")
@@ -116,6 +150,7 @@ function manifestHandler(req, res) {
   try {
     const config = decodeConfigToken(req.params.configToken);
     isConfigured = Boolean(config && config.febboxToken);
+    if (isConfigured) registerInstall(config, req.params.configToken, 'manifest');
   } catch (e) {
     isConfigured = false;
   }
@@ -136,8 +171,14 @@ async function streamHandler(req, res) {
     return res.json({ streams: [] });
   }
 
-  const febboxToken = config.febboxToken;
-  const tokenHash = hashToken(febboxToken);
+  const febboxTokens = config.febboxTokens;
+  const installId = registerInstall(config, configToken, 'stream');
+  if (registry.isBlocked(installId)) {
+    return res.json({ streams: [] });
+  }
+  // Cache key covers the whole pool (never a raw token). Which individual
+  // token produced a cached entry is remembered in the entry itself.
+  const tokenHash = hashToken(febboxTokens.join('\n'));
   const playbackMode = resolver.PLAYBACK_MODE_VALUES.has(config.playbackMode)
     ? config.playbackMode
     : resolver.DEFAULT_PLAYBACK_MODE;
@@ -186,6 +227,7 @@ async function streamHandler(req, res) {
     // ranked candidates) — not duplicated here.
 
     if (!shareKey) {
+      safely(() => registry.recordResult(installId, { outcome: 'empty' }));
       return res.json({ streams: [] });
     }
 
@@ -208,22 +250,38 @@ async function streamHandler(req, res) {
     // fresh below regardless of cache hit/miss.
     const cacheKey = `${tokenHash}:${shareKey}:${type}:${season || ''}:${episode || ''}:${playbackMode}`;
     const cached = playbackCache.get(cacheKey);
-    if (cached) {
+    // A cached entry is skipped if the token that produced it has since been
+    // put on cooldown (quota ran out) — we'd rather re-resolve on the next token.
+    if (cached && !tokenPool.isCooling(cached.usedHash)) {
       incrementCounter(METRIC.PLAYBACK_RESOLUTION_SUCCESS);
-      return res.json({ streams: toStreamObjects(cached, { displayMode, cleanTitle }) });
+      safely(() => registry.recordResult(installId, { outcome: cached.streams.length ? 'ok' : 'empty' }));
+      return res.json({ streams: toStreamObjects(cached.streams, { displayMode, cleanTitle }) });
     }
 
-    const streams = await timed('playback_resolution_total', () =>
-      type === 'movie'
-        ? resolver.resolveMovie({ token: febboxToken, shareKey, playbackMode })
-        : resolver.resolveEpisode({ token: febboxToken, shareKey, season, episode, playbackMode })
+    const { result: streams, hash: usedHash } = await timed('playback_resolution_total', () =>
+      tokenPool.withFailover(
+        febboxTokens,
+        (token) =>
+          type === 'movie'
+            ? resolver.resolveMovie({ token, shareKey, playbackMode })
+            : resolver.resolveEpisode({ token, shareKey, season, episode, playbackMode }),
+        {
+          onEvent: (e) =>
+            safely(() => {
+              if (e.type === 'used') registry.recordTokenUse(installId, e.hash);
+              else if (e.type === 'failover') registry.recordFailover(installId, e.hash, e.code);
+            }),
+        }
+      )
     );
 
-    playbackCache.set(cacheKey, streams, PLAYBACK_CACHE_TTL_MS);
+    playbackCache.set(cacheKey, { streams, usedHash }, PLAYBACK_CACHE_TTL_MS);
     incrementCounter(METRIC.PLAYBACK_RESOLUTION_SUCCESS);
+    safely(() => registry.recordResult(installId, { outcome: streams.length ? 'ok' : 'empty' }));
     return res.json({ streams: toStreamObjects(streams, { displayMode, cleanTitle }) });
   } catch (err) {
     incrementCounter(METRIC.PLAYBACK_RESOLUTION_FAILURE);
+    safely(() => registry.recordResult(installId, { outcome: 'error', errorCode: err && err.code }));
     const safe = redactError(err);
     // Auth/quota failures degrade to an empty stream list, not a 500 — the
     // Stremio client should never see a raw exception.

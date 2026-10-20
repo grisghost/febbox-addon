@@ -61,6 +61,7 @@ const METRIC = {
   FEBBOX_RATE_LIMITED: 'febbox_429',
   PLAYBACK_RESOLUTION_SUCCESS: 'playback_resolution_success',
   PLAYBACK_RESOLUTION_FAILURE: 'playback_resolution_failure',
+  TOKEN_FAILOVER: 'token_failover',
 };
 
 module.exports = { incrementCounter, recordLatency, timed, snapshot, reset, METRIC };

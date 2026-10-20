@@ -20,6 +20,25 @@ const crypto = require('crypto');
 const ALGO = 'aes-256-gcm';
 const IV_LENGTH = 12; // recommended for GCM
 
+// A config may carry several FebBox tokens (ordered by priority). When one
+// runs out of quota the addon fails over to the next — see
+// src/providers/febbox/tokenPool.js.
+const MAX_TOKENS = 5;
+
+/** Normalize payload.febboxTokens / payload.febboxToken into a deduped, trimmed, capped list. */
+function collectTokens(payload) {
+  const raw = [];
+  if (payload && Array.isArray(payload.febboxTokens)) raw.push(...payload.febboxTokens);
+  else if (payload && typeof payload.febboxToken === 'string') raw.push(payload.febboxToken);
+  const out = [];
+  for (const t of raw) {
+    if (typeof t !== 'string') continue;
+    const trimmed = t.trim();
+    if (trimmed && !out.includes(trimmed)) out.push(trimmed);
+  }
+  return out.slice(0, MAX_TOKENS);
+}
+
 function getKey(secretOverride) {
   const secret = secretOverride || process.env.CONFIG_SECRET;
   if (!secret || typeof secret !== 'string' || secret.length < 16) {
@@ -43,19 +62,21 @@ function fromBase64url(str) {
 }
 
 /**
- * @param {{febboxToken: string, quality?: object, [k:string]: any}} payload
+ * @param {{febboxToken?: string, febboxTokens?: string[], label?: string, quality?: object, [k:string]: any}} payload
  * @param {string} [secretOverride] for tests only
  * @returns {string} opaque url-safe token
  */
 function encodeConfigToken(payload, secretOverride) {
-  if (!payload || typeof payload.febboxToken !== 'string' || !payload.febboxToken.trim()) {
+  const tokens = collectTokens(payload);
+  if (tokens.length === 0) {
     throw new Error('encodeConfigToken requires a non-empty payload.febboxToken');
   }
   const key = getKey(secretOverride);
   const iv = crypto.randomBytes(IV_LENGTH);
   const cipher = crypto.createCipheriv(ALGO, key, iv);
 
-  const body = JSON.stringify({ ...payload, createdAt: payload.createdAt || Date.now() });
+  const { febboxToken: _single, ...rest } = payload;
+  const body = JSON.stringify({ ...rest, febboxTokens: tokens, createdAt: payload.createdAt || Date.now() });
   const ciphertext = Buffer.concat([cipher.update(body, 'utf8'), cipher.final()]);
   const authTag = cipher.getAuthTag();
 
@@ -67,7 +88,8 @@ function encodeConfigToken(payload, secretOverride) {
 /**
  * @param {string} token opaque token from encodeConfigToken
  * @param {string} [secretOverride] for tests only
- * @returns {{febboxToken: string, quality?: object, createdAt: number}}
+ * @returns {{febboxToken: string, febboxTokens: string[], label?: string, quality?: object, createdAt: number}}
+ *   `febboxToken` is always the first (highest-priority) entry of `febboxTokens`.
  */
 function decodeConfigToken(token, secretOverride) {
   if (!token || typeof token !== 'string') {
@@ -99,9 +121,12 @@ function decodeConfigToken(token, secretOverride) {
   }
 
   const parsed = JSON.parse(plaintext.toString('utf8'));
-  if (!parsed || typeof parsed.febboxToken !== 'string') {
+  const tokens = collectTokens(parsed);
+  if (!parsed || tokens.length === 0) {
     throw new Error('Invalid config token payload');
   }
+  parsed.febboxTokens = tokens;
+  parsed.febboxToken = tokens[0];
   return parsed;
 }
 
@@ -110,4 +135,12 @@ function hashToken(token) {
   return crypto.createHash('sha256').update(String(token), 'utf8').digest('hex');
 }
 
-module.exports = { encodeConfigToken, decodeConfigToken, hashToken };
+/**
+ * Stable, non-reversible identifier for one install (= one ordered set of
+ * FebBox tokens). Safe to log/display; never derivable back to a token.
+ */
+function getInstallId(tokens) {
+  return hashToken((tokens || []).join('\n')).slice(0, 12);
+}
+
+module.exports = { encodeConfigToken, decodeConfigToken, hashToken, getInstallId, MAX_TOKENS };

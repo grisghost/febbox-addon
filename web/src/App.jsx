@@ -31,6 +31,8 @@ const Icon = {
   Spinner: (p) => <SpinnerIcon weight="bold" className="spin" {...p} />,
 };
 
+const MAX_TOKENS = 5; // keep in sync with MAX_TOKENS in src/config/configToken.js
+
 function formatMB(mb) {
   const units = ['MB', 'GB', 'TB', 'PB'];
   let value = mb;
@@ -136,7 +138,10 @@ function Step({ last, title, sub, children }) {
 }
 
 export default function App() {
-  const [token, setToken] = useState('');
+  // Up to MAX_TOKENS tokens, in priority order: when the first runs out of
+  // quota the addon automatically switches to the next one.
+  const [tokens, setTokens] = useState(['']);
+  const [label, setLabel] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [playbackMode, setPlaybackMode] = useState('direct');
   const [displayMode, setDisplayMode] = useState('standard');
@@ -148,36 +153,53 @@ export default function App() {
   const [result, setResult] = useState(null); // { url, playbackMode, displayMode }
   const [copied, setCopied] = useState(false);
 
+  const filledTokens = tokens.map((t) => t.trim()).filter(Boolean);
+
+  const updateToken = (i, value) => setTokens((list) => list.map((t, idx) => (idx === i ? value : t)));
+  const addToken = () => setTokens((list) => (list.length < MAX_TOKENS ? [...list, ''] : list));
+  const removeToken = (i) => setTokens((list) => (list.length > 1 ? list.filter((_, idx) => idx !== i) : ['']));
+  const moveToken = (i, dir) =>
+    setTokens((list) => {
+      const j = i + dir;
+      if (j < 0 || j >= list.length) return list;
+      const next = [...list];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+
   const validate = useCallback(async () => {
-    const t = token.trim();
-    if (!t) return setStatus({ kind: 'err', text: 'Paste your FebBox token first.' });
+    if (filledTokens.length === 0) return setStatus({ kind: 'err', text: 'Paste your FebBox token first.' });
     setValidating(true);
     setStatus({ kind: 'pending', text: 'Validating…' });
     try {
-      const resp = await fetch('/api/validate-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: t }),
-      });
-      const data = await resp.json();
-      if (data.isValid) {
-        setStatus({
-          kind: 'ok',
-          text: `Token valid — ${data.quota ? formatMB(data.quota.remainingMB) + ' remaining' : 'quota unknown'}`,
+      const lines = [];
+      let allValid = true;
+      for (let i = 0; i < filledTokens.length; i++) {
+        // eslint-disable-next-line no-await-in-loop
+        const resp = await fetch('/api/validate-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: filledTokens[i] }),
         });
-      } else {
-        setStatus({ kind: 'err', text: data.message || 'Token invalid.' });
+        // eslint-disable-next-line no-await-in-loop
+        const data = await resp.json();
+        if (data.isValid) {
+          lines.push(`#${i + 1}: ${data.quota ? formatMB(data.quota.remainingMB) + ' remaining' : 'valid'}`);
+        } else {
+          allValid = false;
+          lines.push(`#${i + 1}: ${data.message || 'invalid'}`);
+        }
       }
+      setStatus({ kind: allValid ? 'ok' : 'err', text: lines.join(' · ') });
     } catch (e) {
       setStatus({ kind: 'err', text: 'Validation request failed — check your connection and try again.' });
     } finally {
       setValidating(false);
     }
-  }, [token]);
+  }, [filledTokens.join('\n')]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const install = useCallback(async () => {
-    const t = token.trim();
-    if (!t) return setStatus({ kind: 'err', text: 'Paste your FebBox token first.' });
+    if (filledTokens.length === 0) return setStatus({ kind: 'err', text: 'Paste your FebBox token first.' });
     setInstalling(true);
     setResult(null);
     setStatus({ kind: 'pending', text: 'Generating install link…' });
@@ -185,13 +207,16 @@ export default function App() {
       const resp = await fetch('/api/create-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: t, playbackMode, displayMode }),
+        body: JSON.stringify({ tokens: filledTokens, label: label.trim(), playbackMode, displayMode }),
       });
       const data = await resp.json();
       if (data.configToken) {
         const url = `${window.location.origin}/${data.configToken}/manifest.json`;
         setResult({ url, playbackMode: data.playbackMode, displayMode: data.displayMode });
-        setStatus({ kind: 'ok', text: `Ready (${data.playbackMode} · ${data.displayMode}).` });
+        setStatus({
+          kind: 'ok',
+          text: `Ready (${data.playbackMode} · ${data.displayMode}${data.tokenCount > 1 ? ` · ${data.tokenCount} tokens with auto-failover` : ''}).`,
+        });
       } else {
         setStatus({ kind: 'err', text: data.error || 'Failed to create config.' });
       }
@@ -200,7 +225,7 @@ export default function App() {
     } finally {
       setInstalling(false);
     }
-  }, [token, playbackMode, displayMode]);
+  }, [filledTokens.join('\n'), label, playbackMode, displayMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const copy = useCallback(async () => {
     if (!result) return;
@@ -248,23 +273,47 @@ export default function App() {
       </div>
 
       <div className="stepper">
-        <Step title="Your FebBox token" sub="Grants the addon access to your own account's catalog and quota.">
+        <Step title="Your FebBox token" sub="Grants the addon access to your own account's catalog and quota. You can add backup tokens for automatic failover.">
           <div className="field">
-            <div className="token-row">
-              <Icon.Key className="token-icon" />
-              <input
-                id="token"
-                aria-label="FebBox Token"
-                type={showToken ? 'text' : 'password'}
-                placeholder="Paste your FebBox token"
-                autoComplete="off"
-                value={token}
-                onChange={(e) => setToken(e.target.value)}
-              />
-              <button type="button" className="toggle-visibility" onClick={() => setShowToken((v) => !v)}>
-                {showToken ? <Icon.EyeOff /> : <Icon.Eye />}
+            {tokens.map((value, i) => (
+              <div key={i} style={{ marginBottom: 8 }}>
+                <div className="token-row">
+                  <Icon.Key className="token-icon" />
+                  <input
+                    id={i === 0 ? 'token' : `token-${i}`}
+                    aria-label={i === 0 ? 'FebBox Token' : `Backup FebBox Token ${i}`}
+                    type={showToken ? 'text' : 'password'}
+                    placeholder={i === 0 ? 'Paste your FebBox token' : `Backup token #${i + 1} (used when the previous one runs out of quota)`}
+                    autoComplete="off"
+                    value={value}
+                    onChange={(e) => updateToken(i, e.target.value)}
+                  />
+                  {i === 0 && (
+                    <button type="button" className="toggle-visibility" onClick={() => setShowToken((v) => !v)}>
+                      {showToken ? <Icon.EyeOff /> : <Icon.Eye />}
+                    </button>
+                  )}
+                </div>
+                {tokens.length > 1 && (
+                  <div className="token-field-footer" style={{ gap: 8 }}>
+                    <button type="button" className="link-btn" disabled={i === 0} onClick={() => moveToken(i, -1)}>↑ Up</button>
+                    <button type="button" className="link-btn" disabled={i === tokens.length - 1} onClick={() => moveToken(i, 1)}>↓ Down</button>
+                    <button type="button" className="link-btn" onClick={() => removeToken(i)}>Remove</button>
+                  </div>
+                )}
+              </div>
+            ))}
+
+            {tokens.length < MAX_TOKENS && (
+              <button type="button" className="link-btn" onClick={addToken}>
+                + Add a backup token
               </button>
-            </div>
+            )}
+            <p className="hint">
+              Tokens are tried in order. If the first one runs out of FebBox quota, the addon switches to the next
+              automatically (checked each time a stream is requested).
+            </p>
+
             <div className="token-field-footer">
               <button type="button" className="link-btn" disabled={validating} onClick={validate}>
                 {validating && <Icon.Spinner />}
@@ -272,6 +321,16 @@ export default function App() {
               </button>
               <StatusLine status={status} />
             </div>
+
+            <label htmlFor="label" style={{ display: 'block', marginTop: 12 }}>Name this install (optional)</label>
+            <input
+              id="label"
+              type="text"
+              maxLength={40}
+              placeholder="e.g. Living room TV — only shown on the admin page"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+            />
           </div>
 
           <details className="advanced" open={tokenHelpOpen} onToggle={(e) => setTokenHelpOpen(e.target.open)}>
@@ -324,7 +383,7 @@ export default function App() {
 
         <Step last title="Install" sub="Generates a per-user install link — nothing is installed until you tap it.">
           <div className="actions">
-            <button type="button" className="btn-primary btn-block" disabled={installing || !token.trim()} onClick={install}>
+            <button type="button" className="btn-primary btn-block" disabled={installing || filledTokens.length === 0} onClick={install}>
               {installing ? <Icon.Spinner /> : <Icon.Link />}
               {installing ? 'Generating…' : 'Generate install link'}
             </button>

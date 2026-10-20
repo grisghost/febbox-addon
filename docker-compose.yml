@@ -3,8 +3,22 @@ services:
     build: .
     image: febbox-addon:latest
     container_name: febbox-addon
-    ports:
-      - "7000:7000"
+#    ports:
+#      - "7000:7000"
     env_file:
       - .env
+    environment:
+      - DATA_DIR=/app/data
+    volumes:
+      - febbox-data:/app/data
     restart: unless-stopped
+    networks:
+      - caddy
+
+networks:
+  caddy:
+    external: true
+    name: caddy
+
+volumes:
+  febbox-data:

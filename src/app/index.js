@@ -6,7 +6,8 @@ const express = require('express');
 const cors = require('cors');
 
 const { rootManifestHandler, manifestHandler, streamHandler, validateTokenHandler } = require('../stremio/routes');
-const { encodeConfigToken } = require('../config/configToken');
+const { encodeConfigToken, MAX_TOKENS } = require('../config/configToken');
+const { createAdminRouter } = require('../admin/adminRoutes');
 const { createRateLimiter } = require('../security/rateLimit');
 const { redactError } = require('../security/redact');
 const { normalizeToken, isPlausibleToken } = require('../providers/febbox/auth');
@@ -32,6 +33,11 @@ function validateStartupEnvironment() {
   if (!process.env.TMDB_API_KEY) {
     logger.warn('startup: TMDB_API_KEY not set — catalog discovery (IMDb/TMDB -> stream) will not work; ' +
       'only direct share-key based lookups would function, and no route currently exposes that.');
+  }
+  if (!process.env.ADMIN_PASSWORD) {
+    logger.info('startup: ADMIN_PASSWORD not set — admin page (/admin) is disabled.');
+  } else if (process.env.ADMIN_PASSWORD.length < 12) {
+    logger.warn('startup: ADMIN_PASSWORD is shorter than 12 characters — use a longer one.');
   }
   const port = Number(process.env.PORT);
   if (process.env.PORT && (!Number.isInteger(port) || port <= 0)) {
@@ -132,23 +138,47 @@ function createApp() {
   app.post('/api/validate-token', apiLimiter, validateTokenHandler);
 
   app.post('/api/create-config', apiLimiter, (req, res) => {
-    const raw = req.body && req.body.token;
-    const token = normalizeToken(raw || '');
-    if (!isPlausibleToken(token)) {
+    // Accepts `tokens: string[]` (priority order, first = preferred; later
+    // ones are used automatically when an earlier one runs out of quota) or
+    // the legacy single `token`.
+    const body = req.body || {};
+    const rawList = Array.isArray(body.tokens) ? body.tokens : [body.token || ''];
+    const tokens = [];
+    for (const raw of rawList) {
+      const t = normalizeToken(raw || '');
+      if (t && !tokens.includes(t)) tokens.push(t);
+    }
+    if (tokens.length === 0 || !tokens.every(isPlausibleToken)) {
       return res.status(400).json({ error: 'Invalid FebBox token format.' });
     }
-    const requestedMode = req.body && req.body.playbackMode;
+    if (tokens.length > MAX_TOKENS) {
+      return res.status(400).json({ error: `At most ${MAX_TOKENS} tokens are supported.` });
+    }
+    // Optional friendly name, shown only on the admin page.
+    const label = typeof body.label === 'string'
+      ? body.label.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 40)
+      : '';
+    const requestedMode = body.playbackMode;
     const playbackMode = PLAYBACK_MODE_VALUES.has(requestedMode) ? requestedMode : DEFAULT_PLAYBACK_MODE;
-    const requestedDisplayMode = req.body && req.body.displayMode;
+    const requestedDisplayMode = body.displayMode;
     const displayMode = DISPLAY_MODE_VALUES.has(requestedDisplayMode) ? requestedDisplayMode : DEFAULT_DISPLAY_MODE;
     try {
-      const configToken = encodeConfigToken({ febboxToken: token, quality: req.body.quality || {}, playbackMode, displayMode });
-      res.json({ configToken, playbackMode, displayMode });
+      const configToken = encodeConfigToken({
+        febboxTokens: tokens,
+        ...(label ? { label } : {}),
+        quality: body.quality || {},
+        playbackMode,
+        displayMode,
+      });
+      res.json({ configToken, playbackMode, displayMode, tokenCount: tokens.length });
     } catch (err) {
       const safe = redactError(err);
       res.status(500).json({ error: safe.message });
     }
   });
+
+  // Admin area (disabled with a 404 unless ADMIN_PASSWORD is set).
+  app.use(createAdminRouter());
 
   app.get('/:configToken/manifest.json', manifestHandler);
   app.get('/:configToken/stream/:type/:id.json', streamLimiter, streamHandler);

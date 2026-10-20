@@ -84,3 +84,28 @@ live AIOStreams instance in this environment.
   public site rather than a documented API** (see
   `docs/CATALOG_DISCOVERY_RESEARCH.md`) — reliable in practice, but could
   break without notice if ShowBox changes its markup or endpoints.
+
+## Multiple tokens and automatic failover
+
+On the config page you can add up to 5 FebBox tokens in priority order. Each time
+a stream is requested the addon uses the first token that still has quota
+(remaining quota is read from FebBox and cached for ~2 minutes); if FebBox
+rejects a token (invalid / rate-limited / quota), it is paused for a while and the
+next token is tried. Tokens with less than `MIN_REMAINING_MB` left (default 1024)
+are only used when no other token has more room.
+
+Note: FebBox counts quota when the video is *played*, so the switch happens the
+next time a stream list is requested — it can't move a playback that is already
+running to another token. With a single token nothing changes.
+
+## Admin page
+
+Set `ADMIN_PASSWORD` and open `/admin` over HTTPS; you sign in with that password on a login page (session cookie, 12 hours). Changing `ADMIN_PASSWORD` or `CONFIG_SECRET` signs everyone out.
+It lists every install the server has seen (name, last activity, request/error
+counters, number of failovers) and, for each token, its status and remaining
+quota (shown only as an 8-character hash prefix, never the token). From there you
+can refresh quotas, block an install (it then receives no streams), or remove it
+from the list. Installs are recorded in `DATA_DIR/registry.json`; on hosts with an
+ephemeral disk the list resets on redeploy. Because install URLs are stateless,
+"block" works by install id and cannot revoke the URL itself — rotate
+`CONFIG_SECRET` to invalidate every install at once.
